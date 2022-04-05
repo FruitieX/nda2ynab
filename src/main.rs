@@ -1,4 +1,4 @@
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, Utc};
 use clap::Parser;
 use csv::{ReaderBuilder, WriterBuilder};
 use itertools::Itertools;
@@ -95,14 +95,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let newest_file = matches.first().ok_or("Could not find any matching files")?;
 
     println!(
-        "Using most recently exported file: {}",
+        "Using most recent file as main CSV:\n{}\n",
         newest_file.file_name
     );
 
     // Try to find previous csv file with matching iban and read most recent transactions
     let prev_file = matches.iter().skip(1).find(|m| m.iban == newest_file.iban);
     let prev_file_trx = if let Some(prev_file) = prev_file {
-        println!("Using previously exported file: {}", prev_file.file_name);
+        println!(
+            "Comparing transactions with previously processed file:\n{}\n",
+            prev_file.file_name
+        );
 
         let rows = read_nda_csv(&prev_file.path)?;
 
@@ -119,7 +122,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             repetitions,
         })
     } else {
-        println!("No previous export found, including all rows from the csv file");
+        println!("No previously processed file found, including all rows from the main CSV file");
 
         None
     };
@@ -127,9 +130,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let newest_rows = read_nda_csv(&newest_file.path)?;
 
     // Remove all previously processed rows from newest_rows
-    let first_previously_processed_index = if let (Some(prev_file), Some(prev_file_trx)) =
-        (prev_file, prev_file_trx)
-    {
+    let first_previously_processed_index = if let Some(prev_file_trx) = prev_file_trx {
         let positions_matches: Vec<usize> = newest_rows
             .iter()
             .positions(|r| r == &prev_file_trx.transaction)
@@ -138,7 +139,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         let match_count = positions_matches.len();
 
         if match_count < prev_file_trx.repetitions {
-            return Err(format!("The most recent transaction in '{}' was found in '{}' {} time(s), which is fewer than the {} time(s) it appears in '{}'. Make sure the most recent export contains rows from the previous export.", prev_file.file_name, newest_file.file_name, match_count, prev_file_trx.repetitions, prev_file.file_name ).into());
+            eprintln!("Error: The most recent transaction in the previously processed CSV was found in the main CSV");
+            eprintln!("{} time(s), expected to find it {} time(s). Make sure the most recent CSV contains at least the", match_count, prev_file_trx.repetitions);
+            eprintln!(
+                "entire last day worth of transactions from the previously processed CSV file."
+            );
+            eprintln!();
+            eprintln!("Missing transaction: {:#?}\n", prev_file_trx.transaction);
+            return Err(
+                "Aborting due to non-overlapping transactions in main and previous CSV files."
+                    .into(),
+            );
         }
 
         positions_matches
@@ -157,10 +168,16 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut wtr = WriterBuilder::new().from_path("out.csv")?;
 
+    let num_trx = rows.len();
+
     let _: Result<Vec<_>, _> = rows
         .into_iter()
         .map(|r| YnabRow {
-            date: r.date,
+            // Assume "Invalid date" means today (authorisation holds)
+            date: r.date.replace(
+                "Invalid date",
+                &Utc::now().naive_utc().format("%d.%m.%Y").to_string(),
+            ),
             payee: r.description,
             memo: "".to_string(),
             amount: r.amount,
@@ -170,7 +187,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     wtr.flush()?;
 
-    println!("Results written to out.csv.");
+    println!("{} transactions written to out.csv.", num_trx);
 
     Ok(())
 }

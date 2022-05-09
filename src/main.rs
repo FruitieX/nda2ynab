@@ -61,7 +61,23 @@ struct PrevFileNewestTransaction {
 
 fn read_nda_csv(path: &Path) -> Result<Vec<NdaRow>, Box<dyn Error>> {
     let mut rdr = ReaderBuilder::new().delimiter(b';').from_path(path)?;
-    let rows: Vec<NdaRow> = rdr.deserialize().filter_map(|r| r.ok()).collect();
+    let rows: Vec<NdaRow> = rdr
+        .deserialize()
+        .filter_map(|r| r.ok())
+        // "Invalid date" seems to indicate authorisation holds, skip these
+        .filter(|r: &NdaRow| {
+            let invalid_date = r.date == "Invalid date";
+
+            if invalid_date {
+                println!(
+                    "Skipping transaction in {} due to invalid date, probably an authorisation hold.", path.display()
+                );
+                eprintln!("Transaction: {:#?}\n", r);
+            }
+
+            !invalid_date
+        })
+        .collect();
     Ok(rows)
 }
 
@@ -173,11 +189,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let _: Result<Vec<_>, _> = rows
         .into_iter()
         .map(|r| YnabRow {
-            // Assume "Invalid date" means today (authorisation holds)
-            date: r.date.replace(
-                "Invalid date",
-                &Utc::now().naive_utc().format("%d.%m.%Y").to_string(),
-            ),
+            date: r.date,
             payee: r.description,
             memo: "".to_string(),
             amount: r.amount,

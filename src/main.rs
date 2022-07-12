@@ -93,7 +93,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             let file_name = path.file_name()?.to_str()?.to_string();
             let iban = re.captures(&file_name)?.get(1)?.as_str().to_string();
             let date_match = re.captures(&file_name)?.get(2)?.as_str();
-            let date = NaiveDateTime::parse_from_str(date_match, "%Y.%m.%d %H.%M").ok()?;
+
+            // Nordea recently changed the filename format of csv exports, try both
+            let date = NaiveDateTime::parse_from_str(date_match, "%Y-%m-%d %H.%M.%S").ok().or_else(|| {
+                NaiveDateTime::parse_from_str(date_match, "%Y.%m.%d %H.%M").ok()
+            })?;
 
             Some(ParsedFileName {
                 file_name,
